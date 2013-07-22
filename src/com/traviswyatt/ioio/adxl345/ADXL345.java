@@ -121,8 +121,9 @@ public class ADXL345 implements IOIOLooper {
 		this.rate = rate;
 	}
 	
-	public void setListener(ADXL345Listener listener) {
+	public ADXL345 setListener(ADXL345Listener listener) {
 		this.listener = listener;
+		return this;
 	}
 	
 	/**
@@ -191,17 +192,15 @@ public class ADXL345 implements IOIOLooper {
 		write(POWER_CTL, POWER_CTL_Measure);
 	}
 	
-	protected void write(byte address, byte value) throws ConnectionLostException, InterruptedException {
-		writeBuffer[0] = address;
+	protected void write(byte register, byte value) throws ConnectionLostException, InterruptedException {
+		writeBuffer[0] = register;
 		writeBuffer[1] = value;
 		flush(2);
 	}
 	
-	protected void write(byte address, byte[] values) throws ConnectionLostException, InterruptedException {
-		writeBuffer[0] = address;
-		for (int i = 0; i < values.length; i++) {
-			writeBuffer[i + 1] = values[i];
-		}
+	protected void write(byte register, byte[] values) throws ConnectionLostException, InterruptedException {
+		writeBuffer[0] = register;
+		System.arraycopy(values, 0, writeBuffer, 1, values.length);
 		flush(1 + values.length);
 	}
 	
@@ -222,8 +221,8 @@ public class ADXL345 implements IOIOLooper {
 			Thread.sleep(REGISTER_WRITE_DELAY);
 	}
 	
-	protected void read(byte address, int length, byte[] values) throws ConnectionLostException, InterruptedException {
-	    byte tx = (byte) (address | ADXL345_SPI_READ);
+	protected void read(byte register, int length, byte[] values) throws ConnectionLostException, InterruptedException {
+	    byte tx = (byte) (register | ADXL345_SPI_READ);
 	    if (length > 1) // multi-byte read
 	    	tx |= ADXL345_MULTI_BYTE;
 	    writeBuffer[0] = tx;

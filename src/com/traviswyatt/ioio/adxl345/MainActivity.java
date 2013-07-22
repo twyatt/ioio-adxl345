@@ -108,7 +108,7 @@ public class MainActivity extends IOIOActivity {
 		@Override
 		public void setup(IOIO ioio) throws ConnectionLostException, InterruptedException {
 			device.setup(ioio);
-			updateTextView(ioioStatusText, "Connected");
+			updateTextView(ioioStatusText, "IOIO Connected");
 		}
 
 		/**
@@ -129,13 +129,13 @@ public class MainActivity extends IOIOActivity {
 		@Override
 		public void disconnected() {
 			device.disconnected();
-			updateTextView(ioioStatusText, "Disconnected");
+			updateTextView(ioioStatusText, "IOIO Disconnected");
 		}
 
 		@Override
 		public void incompatible() {
 			device.incompatible();
-			updateTextView(ioioStatusText, "Incompatible");
+			updateTextView(ioioStatusText, "IOIO Incompatible");
 		}
 	}
 
