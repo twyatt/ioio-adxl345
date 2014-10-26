@@ -10,10 +10,8 @@ import ioio.lib.util.IOIOLooper;
 
 public class ADXL345 implements IOIOLooper {
 	
-	/**
-	 * Duration to sleep thread after a register write.
-	 */
-	public static final long REGISTER_WRITE_DELAY = 200L;
+	public static final Rate DEFAULT_RATE = Rate.RATE_250K;
+	public static final Range DEFAULT_RANGE = Range.RANGE_16G;
 	
 	/**
 	 * Bit structure:
@@ -64,13 +62,31 @@ public class ADXL345 implements IOIOLooper {
 	public static final byte BW_RATE_RESET_VALUE    = (byte) 0x0A;
 	public static final byte INT_SOURCE_RESET_VALUE = (byte) 0x02;
 	
+	public static final byte BW_RATE_3200_Hz = (byte) 0x0F; // 0000 1111
+	public static final byte BW_RATE_1600_Hz = (byte) 0x0E; // 0000 1110
+	public static final byte BW_RATE_800_Hz  = (byte) 0x0D; // 0000 1101
+	public static final byte BW_RATE_400_Hz  = (byte) 0x0C; // 0000 1100
+	public static final byte BW_RATE_200_Hz  = (byte) 0x0B; // 0000 1011
+	public static final byte BW_RATE_100_Hz  = (byte) 0x0A; // 0000 1010
+	public static final byte BW_RATE_50_Hz   = (byte) 0x09; // 0000 1001
+	public static final byte BW_RATE_25_Hz   = (byte) 0x08; // 0000 1000
+	// ...
+	
+	/**
+	 * Register 0x2C-BW_RATE (Read/Write)
+	 * 
+	 * | D7 | D6 | D5 |     D4    | D3 | D2 | D1 | D0 |
+	 * |  0 |  0 |  0 | LOW_POWER |        Rate       |
+	 */
+	public static final byte BW_RATE_Rate = (byte) 0x0F; // 0000 1111
+	
 	/**
 	 * Register 0x2D-POWER_CTL (Read/Write)
 	 * 
 	 * | D7 | D6 |  D5  |     D4     |   D3    |   D2  | D1 | D0 |
 	 * |  0 |  0 | Link | AUTO_SLEEP | Measure | Sleep |  Wakeup |
 	 */
-	public static final byte POWER_CTL_Measure = (byte) 0x08;
+	public static final byte POWER_CTL_Measure = (byte) 0x08; // 0000 1000
 	
 	/**
 	 * Register 0x31-DATA_FORMAT (Read/Write)
@@ -78,15 +94,27 @@ public class ADXL345 implements IOIOLooper {
 	 * |     D7    |  D6 |     D5     | D4 |    D3    |    D2   | D1 | D0 |
 	 * | SELF_TEST | SPI | INT_INVERT |  0 | FULL_RES | Justify |  Range  |
 	 */
-	public static final byte SPI_3WIRE = (byte) 0x40;
+	public static final byte DATA_FORMAT_SELF_TEST = (byte) 0x80; // 0100 0000
+	public static final byte DATA_FORMAT_SPI_3WIRE = (byte) 0x40; // 0100 0000
 	
-	public static final byte DATA_FORMAT_Range_2G  = (byte) 0x00; // +/- 2 g
-	public static final byte DATA_FORMAT_Range_4G  = (byte) 0x01; // +/- 4 g
-	public static final byte DATA_FORMAT_Range_8G  = (byte) 0x02; // +/- 8 g
-	public static final byte DATA_FORMAT_Range_16G = (byte) 0x03; // +/- 16 g
+	/**
+	 * Associates G range values with their corresponding DATA_FORMAT bits.
+	 */
+	public enum Range {
+		RANGE_2G  (2f,  (byte) 0x00), // +/- 2 G
+		RANGE_4G  (4f,  (byte) 0x01), // +/- 4 G
+		RANGE_8G  (8f,  (byte) 0x02), // +/- 8 G
+		RANGE_16G (16f, (byte) 0x03)  // +/- 16 G
+		;
+		private final float value;
+		private final byte bits; // DATA_FORMAT's D1 and D0 bits
+		Range(float value, byte bits) {
+			this.value = value;
+			this.bits = bits;
+		}
+	}
 	
-	private static final int READ_BUFFER_SIZE  = 10; // bytes
-	private static final int WRITE_BUFFER_SIZE = 10; // bytes
+	private static final int BUFFER_SIZE = 10; // bytes
 	
 	public interface ADXL345Listener {
 		public void onDeviceId(byte deviceId);
@@ -96,34 +124,55 @@ public class ADXL345 implements IOIOLooper {
 	
 	private ADXL345Listener listener;
 	
-	private byte deviceId;
-	private float multiplier = 2f * 2f / 1024f; // default is for +/- 2G range
-	
 	private int x;
 	private int y;
 	private int z;
+	
+	private final byte[] buffer = new byte[BUFFER_SIZE];
 	
 	private final DigitalInput.Spec miso;
 	private final DigitalOutput.Spec mosi;
 	private final DigitalOutput.Spec clk;
 	private final DigitalOutput.Spec[] slaveSelect;
 	private final Rate rate;
+	private Range range;
+	
 	private SpiMaster spi;
 	
-	private byte[] readBuffer  = new byte[READ_BUFFER_SIZE];
-	private byte[] writeBuffer = new byte[WRITE_BUFFER_SIZE];
+	public ADXL345(int sdoPin, int sdaPin, int sclPin, int csPin) {
+		this(sdoPin, sdaPin, sclPin, csPin, DEFAULT_RATE);
+	}
 	
 	public ADXL345(int sdoPin, int sdaPin, int sclPin, int csPin, Rate rate) {
+		this(sdoPin, sdaPin, sclPin, csPin, rate, DEFAULT_RANGE);
+	}
+	
+	public ADXL345(int sdoPin, int sdaPin, int sclPin, int csPin, Rate rate, Range range) {
 		miso = new DigitalInput.Spec(sdoPin);
 		mosi = new DigitalOutput.Spec(sdaPin);
 		clk  = new DigitalOutput.Spec(sclPin);
 		slaveSelect = new DigitalOutput.Spec[] { new DigitalOutput.Spec(csPin) };
 		this.rate = rate;
+		this.range = range;
 	}
 	
 	public ADXL345 setListener(ADXL345Listener listener) {
 		this.listener = listener;
 		return this;
+	}
+	
+	private void setupDevice() throws InterruptedException, ConnectionLostException {
+		byte deviceId = readDeviceId();
+		if (deviceId != DEVID_RESET_VALUE) {
+			onError("Invalid device ID, expected " + (DEVID_RESET_VALUE & 0xFF) + " but got " + (deviceId & 0xFF));
+		}
+		if (listener != null) {
+			listener.onDeviceId(deviceId);
+		}
+		
+		write(DATA_FORMAT, range.bits);
+		write(POWER_CTL, POWER_CTL_Measure);
+		write(BW_RATE, BW_RATE_1600_Hz);
 	}
 	
 	/**
@@ -132,80 +181,44 @@ public class ADXL345 implements IOIOLooper {
 	 * @return
 	 */
 	public float getMultiplier() {
-		return multiplier;
+		return range.value * 2f / 1024f;
+	}
+	
+	public byte readDeviceId() throws ConnectionLostException, InterruptedException {
+		read(DEVID, 1);
+		return buffer[0];
 	}
 	
 	/**
-	 * Sets the G range.
-	 * Supported ranges are: +/- 2 G, +/- 4 G, +/- 8 G, +/- 16 G
+	 * Writes specified register and value.
 	 * 
-	 * @param range G range of either 2, 4, 8, or 16.
-	 * @throws InterruptedException 
-	 * @throws ConnectionLostException 
+	 * @param register
+	 * @param value
+	 * @throws ConnectionLostException
+	 * @throws InterruptedException
 	 */
-	public void setRange(int range) throws ConnectionLostException, InterruptedException {
-		byte value;
-		switch (range) {
-		case 2: // +/- 2 G
-			value = DATA_FORMAT_Range_2G;
-			break;
-		case 4: // +/- 4 G
-			value = DATA_FORMAT_Range_4G;
-			break;
-		case 8: // +/- 8 G
-			value = DATA_FORMAT_Range_8G;
-			break;
-		case 16: // +/- 16 G
-			value = DATA_FORMAT_Range_16G;
-			break;
-		default:
-			onError("Unsupported G range: " + range);
-			return;
-		}
-		
-		write(DATA_FORMAT, value);
-		
-		// Gs = Measurement Value * (G-range / 2^10)
-		multiplier = (float) range * 2f / 1024f;
-	}
-	
-	public byte getDeviceId() throws ConnectionLostException, InterruptedException {
-		read(DEVID, 1, readBuffer);
-		return readBuffer[0];
-	}
-	
-	private void setupDevice() throws InterruptedException, ConnectionLostException {
-		byte id = getDeviceId();
-		Thread.sleep(REGISTER_WRITE_DELAY);
-		
-		if (id == DEVID_RESET_VALUE) {
-			deviceId = id;
-		} else {
-			onError("Invalid device ID, expected " + (DEVID_RESET_VALUE & 0xFF) + " but got " + (id & 0xFF));
-		}
-		
-		if (listener != null) {
-			listener.onDeviceId(deviceId);
-		}
-		
-		setRange(16); // +/- 16 G
-		write(POWER_CTL, POWER_CTL_Measure);
-	}
-	
 	protected void write(byte register, byte value) throws ConnectionLostException, InterruptedException {
-		writeBuffer[0] = register;
-		writeBuffer[1] = value;
+		buffer[0] = register;
+		buffer[1] = value;
 		flush(2);
 	}
 	
+	/**
+	 * Writes specified register and values.
+	 * 
+	 * @param register
+	 * @param values
+	 * @throws ConnectionLostException
+	 * @throws InterruptedException
+	 */
 	protected void write(byte register, byte[] values) throws ConnectionLostException, InterruptedException {
-		writeBuffer[0] = register;
-		System.arraycopy(values, 0, writeBuffer, 1, values.length);
+		buffer[0] = register;
+		System.arraycopy(values, 0, buffer, 1, values.length);
 		flush(1 + values.length);
 	}
 	
 	/**
-	 * Writes the write buffer to the SPI.
+	 * Writes the buffer to the SPI.
 	 * 
 	 * @param length Number of bytes of the buffer to write.
 	 * @throws ConnectionLostException
@@ -215,22 +228,19 @@ public class ADXL345 implements IOIOLooper {
 		int writeSize = length;
 		int readSize = 0;
 		int totalSize = writeSize + readSize;
-		spi.writeRead(writeBuffer, writeSize, totalSize, readBuffer, readSize);
-		
-		if (REGISTER_WRITE_DELAY > 0)
-			Thread.sleep(REGISTER_WRITE_DELAY);
+		spi.writeRead(buffer, writeSize, totalSize, buffer, readSize);
 	}
 	
-	protected void read(byte register, int length, byte[] values) throws ConnectionLostException, InterruptedException {
+	protected void read(byte register, int length) throws ConnectionLostException, InterruptedException {
 	    byte tx = (byte) (register | ADXL345_SPI_READ);
 	    if (length > 1) // multi-byte read
 	    	tx |= ADXL345_MULTI_BYTE;
-	    writeBuffer[0] = tx;
+	    buffer[0] = tx;
 		
 		int writeSize = 1;
 		int readSize = length;
 		int totalSize = writeSize + readSize;
-		spi.writeRead(writeBuffer, writeSize, totalSize, values, readSize);
+		spi.writeRead(buffer, writeSize, totalSize, buffer, readSize);
 	}
 	
 	private void onError(String message) {
@@ -256,10 +266,10 @@ public class ADXL345 implements IOIOLooper {
 	@Override
 	public void loop() throws ConnectionLostException, InterruptedException {
 		if (listener != null) {
-			read(DATAX0, 6, readBuffer);
-			x = (readBuffer[1] << 8) | readBuffer[0];
-			y = (readBuffer[3] << 8) | readBuffer[2];
-			z = (readBuffer[5] << 8) | readBuffer[4];
+			read(DATAX0, 6);
+			x = (buffer[1] << 8) | buffer[0];
+			y = (buffer[3] << 8) | buffer[2];
+			z = (buffer[5] << 8) | buffer[4];
 			listener.onData(x, y, z);
 		}
 	}
@@ -271,6 +281,11 @@ public class ADXL345 implements IOIOLooper {
 
 	@Override
 	public void incompatible() {
+		// deprecated
+	}
+
+	@Override
+	public void incompatible(IOIO ioio) {
 		// TODO Auto-generated method stub
 	}
 	

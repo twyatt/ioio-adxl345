@@ -134,8 +134,13 @@ public class MainActivity extends IOIOActivity {
 
 		@Override
 		public void incompatible() {
-			device.incompatible();
+			// deprecated
+		}
+
+		@Override
+		public void incompatible(IOIO ioio) {
 			updateTextView(ioioStatusText, "IOIO Incompatible");
+			device.incompatible(ioio);
 		}
 	}
 
